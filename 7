@@ -1,0 +1,27 @@
+| search ((resourceType = "caseManagement") and (status = "Approved and Close"))
+| eval start_time := 2026-08-23 00:00:00, end_time := 2026-11-25 23:59:59
+| eval created_start := relativeTime(start_time, '-60d')
+| search ((created >= created_start) and (created <= end_time))
+| fields key, created, updated, start_time, end_time
+| eval closed_time := GetStatusChangedTime(key, "Approved and Close")
+| search ((closed_time >= start_time) and (closed_time <= end_time) and (created <= closed_time))
+| join type := left @outer.key = @inner.key
+    [
+        | datasource "resource_history" ApplyParentTimeRange := false
+        | search evantname ~ "statuschange"
+        | SEARCH not isNullOrEmpty(key)
+        | eval history_start := relativeTime(2026-08-23 00:00:00, '-60d'), history_end := 2026-11-25 23:59:59
+        | search ((eventtime >= history_start) and (eventtime <= history_end))
+        | search newstatusname in ("Open", "Containment", "Missconfiguration", "Declined")
+        | eval eventtime := tounixtime(eventtime),
+               statusType := case(newstatusname = "Open", "inOpen", newstatusname in ("Containment", "Missconfiguration", "Declined"), "outTriage")
+        | stats min(eventtime) by key, statusType
+        | fields key, min_eventtime
+        | sort -key, +min_eventtime
+        | mvcombine min_eventtime
+        | eval mttt := mvselect(min_eventtime, 1) - mvselect(min_eventtime, 0),
+               mttt := round(mttt/60, 2)
+        | fields key, mttt
+    ]
+| stats avg(mttt) as MTTT
+| eval MTTT := round(MTTT, 2)
